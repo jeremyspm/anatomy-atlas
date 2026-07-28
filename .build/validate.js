@@ -102,10 +102,15 @@ if (!haveUpstream) { bad('skipped — no upstream'); }
 else {
   const a = fs.readFileSync(UP.registry);
   const b = fs.readFileSync(OURS.registry);
-  if (a.equals(b)) ok('identical to upstream (' + a.length + ' bytes)');
+  // Line endings are a CHECKOUT artefact, not content drift — two clones with
+  // different core.autocrlf would otherwise fail this forever and train everyone
+  // to ignore the one check that matters. Compare content; report CRLF/LF apart.
+  const norm = (buf) => buf.toString('utf8').replace(/\r\n/g, '\n');
+  if (a.equals(b)) ok('byte-for-byte identical to upstream (' + a.length + ' bytes)');
+  else if (norm(a) === norm(b)) ok('identical to upstream (line endings differ — checkout artefact, see .gitattributes)');
   else {
     bad('DIFFERS from upstream. The registry must be an exact copy.');
-    const la = read(UP.registry).split('\n'), lb = read(OURS.registry).split('\n');
+    const la = norm(a).split('\n'), lb = norm(b).split('\n');
     for (let i = 0; i < Math.max(la.length, lb.length); i++) {
       if (la[i] !== lb[i]) { console.log('      first diff line ' + (i + 1) + '\n      upstream: ' + (la[i] || '(eof)') + '\n      ours:     ' + (lb[i] || '(eof)')); break; }
     }

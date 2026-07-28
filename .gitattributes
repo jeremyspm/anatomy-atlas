@@ -1,0 +1,8 @@
+# Keep text files stable across checkouts. anatomy-systems.js is validated
+# byte-for-byte against Giga's copy, so a CRLF/LF flip between working copies
+# would read as content drift. The validator normalises line endings too, but
+# pinning here means the two never disagree in the first place.
+* text=auto
+
+*.glb  binary
+*.wasm binary
