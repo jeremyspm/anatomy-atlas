@@ -255,6 +255,24 @@ button{font-family:inherit;cursor:pointer}
       authored separately — they cannot line up with the body, so opening one closes
       everything else. That is a property of the source models, not a bug.</p>
 
+    <h3>What each system actually contains</h3>
+    <p>The models are anatomical exports, not a textbook syllabus, and two of them cover less
+      than their name suggests — so the panel says so rather than letting you find out by
+      hunting for something that was never in the file:</p>
+    <ul>
+      <li><strong>Integumentary</strong> is <strong>hair and nails</strong>. The source has no
+        skin mesh, so there is no skin layer to switch on.</li>
+      <li><strong>Reproductive</strong> is the <strong>male</strong> set. The source body is
+        male and has no female reproductive organs.</li>
+      <li><strong>Lymphatic</strong> is nodes plus spleen, thymus and tonsils — there are no
+        lymphatic vessels or ducts in the export, so no vessel layer is offered.</li>
+      <li><strong>Muscle attachments</strong> are the origin (red) and insertion (blue)
+        footprints painted on bone — switch <strong>Skeletal</strong> on with it.</li>
+      <li><strong>Skeletal</strong> (a body system, overlays everything) and <strong>Skeleton
+        (full)</strong> (reference detail, opens on its own) are two different source models,
+        not a duplicate.</li>
+    </ul>
+
     <h3>Downloads &amp; data</h3>
     <p>Each system is a separate file, listed with its size, and only downloads when you
       switch it on — nothing loads by itself on a phone. After the first load your browser
@@ -263,10 +281,13 @@ button{font-family:inherit;cursor:pointer}
     <h3>Where the models come from <span style="font-weight:400;text-transform:none;letter-spacing:0">(admin note)</span></h3>
     <p>Meshes are <strong>Z-Anatomy</strong> and <strong>AnatomyTOOL / Open3DModel</strong>,
       used under <strong>CC BY-SA 4.0</strong> — the credit line in the panel is the licence
-      requirement, so it must not be removed. The registry of what exists and what is still
-      planned is <code>anatomy-systems.js</code>, copied byte-for-byte from Giga; layer colours
-      and the name-matching that assigns them live there too. Structure names are the source
-      models' own (Terminologia Anatomica), not rewritten.</p>
+      requirement, so it must not be removed. <code>anatomy-systems.js</code> is copied
+      byte-for-byte from Giga and is not edited here; <code>anatomy-systems-extra.js</code>
+      sits on top of it and promotes the eleven systems Giga exported but never wired into
+      its registry, each with a layer scheme authored against the real export. Both are
+      checked by <code>.build/validate.js</code>, which fails if the copy drifts or if a
+      scheme stops matching its model. Structure names are the source models' own
+      (Terminologia Anatomica), not rewritten.</p>
     <button class="anat-close" id="btnCloseHelp">Got it</button>
   </div>
 </div>

@@ -36,13 +36,23 @@
 // D9  Mobile: `setPixelRatio` caps at 1.5 rather than 2, nothing auto-loads,
 //     and the rail is driven as a bottom sheet.
 // D10 Per-system download size shown before you tap it (SIZES below).
+// D13 The registry is read through anatomy-systems-extra.js, which promotes the
+//     11 Z-Anatomy systems the upstream exported to its own /public/anatomy but
+//     left at `status: 'planned'` — the assets shipped, the registry row never
+//     did, so 7 systems read "coming" while their GLB sat in the repo. See that
+//     file's header for the transform and the per-system layer schemes.
+// D14 buildSystem passes the MATERIAL name as a second argument to a byName
+//     classifier. Additive: upstream classifiers ignore it.
 // ════════════════════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { SYSTEMS, getSystem, anatomyUrl, schemeFor, isLabelMesh } from './anatomy-systems.js';
+// D13 — the registry comes through anatomy-systems-extra.js, which promotes the
+// systems Giga exported but never wired up. anatomy-systems.js itself stays a
+// byte-for-byte copy of the upstream (validator §1); the extension re-exports it.
+import { SYSTEMS, getSystem, anatomyUrl, schemeFor, isLabelMesh } from './anatomy-systems-extra.js';
 
 const DRACO_PATH = './vendor/three/jsm/libs/draco/';
 const GHOST_OPACITY = 0.06;
@@ -61,6 +71,10 @@ const isDetail = (id) => DETAIL_SYSTEMS.some((s) => s.id === id);
 // `cardiovascular.glb`, and keying by file silently drops the chip.
 const SIZES = {
   cardio: 6.1, respiratory: 0.7, nervous: 5.9,
+  // D13 — the promoted systems.
+  renal: 0.1, digestive: 1.0, endocrine: 0.1, lymphatic: 0.5,
+  reproductive: 0.1, integumentary: 0.1,
+  skeletal: 1.8, joints: 1.6, muscular: 4.7, insertions: 3.6, regions: 0.7,
   skeleton: 3.3, skull: 1.1, hand: 3.1, upperlimb: 6.6, lowerlimb: 5.9,
 };
 
@@ -187,7 +201,11 @@ const buildSystem = (s, gltf) => {
     o.material = o.material.clone();
     o.material.side = THREE.DoubleSide;
     const label = o.name || (o.parent && o.parent.name) || 'structure';
-    const k = byName ? classify(label) : classify(o.material.name);
+    // D14 — a byName classifier also receives the material name. The upstream's
+    // three take one argument and ignore the second, so their behaviour is
+    // unchanged; the D13 schemes need both (Z-Anatomy puts the muscle's ACTION
+    // and the joint's TISSUE in the material, the structure in the name).
+    const k = byName ? classify(label, o.material.name) : classify(o.material.name);
     if (byName) {
       const def = defs.find((d) => d.key === k);
       if (def && def.hex != null && o.material.color) {

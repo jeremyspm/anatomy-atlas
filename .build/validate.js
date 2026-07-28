@@ -28,6 +28,7 @@ const UP = {
 };
 const OURS = {
   registry: path.join(ROOT, 'anatomy-systems.js'),
+  extra: path.join(ROOT, 'anatomy-systems-extra.js'),
   html: path.join(ROOT, 'index.html'),
   js: path.join(ROOT, 'atlas.js'),
 };
@@ -47,6 +48,8 @@ const DEVIATIONS = [
   ['D10', 'atlas.js',   'SIZES — per-system download size shown before the tap. Keyed by registry id, not filename.'],
   ['D11', 'index.html', 'FIX: .anat-host canvas gets width/height:100%. Upstream setSize(w,h,false) never sets the canvas CSS size, so at dpr>1 the canvas exceeds its host and the scene renders cropped.'],
   ['D12', 'index.html', 'DEAD CSS not copied: .anat-picker{} / .anat-picker:focus{}. Verified unused in the upstream — a leftover from the pre-additive single-model <select>, replaced by the checkbox rail.'],
+  ['D13', 'atlas.js',   'Registry read through anatomy-systems-extra.js: promotes the 11 systems the upstream exported to /public/anatomy but left `planned`, and gives each an authored layer scheme (§7). anatomy-systems.js stays byte-for-byte (§1).'],
+  ['D14', 'atlas.js',   'buildSystem passes the material name as a 2nd arg to byName classifiers. Additive — upstream classifiers ignore it.'],
 ];
 
 /* Upstream selectors deliberately NOT copied. Every entry must be justified in
@@ -195,40 +198,137 @@ head('§4  BN Hub Uniformity Contract');
   /jeremyspm\.github\.io\//.test(html) ? ok('← Hub back link present') : bad('no back link to the hub');
 }
 
-// ── §5 assets match the registry ────────────────────────────────────────────
-head('§5  Shipped assets match the registry');
-{
-  const reg = read(OURS.registry);
-  const ready = [...reg.matchAll(/\{\s*id:\s*'([^']+)'[^}]*?file:\s*'([^']+)'[^}]*?status:\s*'ready'/g)].map((m) => ({ id: m[1], file: m[2] }));
-  ready.length ? ok(ready.length + " systems marked 'ready' in the registry") : bad('parsed 0 ready systems');
-  const js = read(OURS.js);
-  for (const r of ready) {
-    const p = path.join(ROOT, 'anatomy', r.file);
-    if (!fs.existsSync(p)) { bad(r.id + ": status 'ready' but anatomy/" + r.file + ' is missing'); continue; }
-    const mb = fs.statSync(p).size / 1048576;
-    // D10 — SIZES is keyed by registry id, not filename. A miss silently drops the chip.
-    const m = js.match(new RegExp('\\b' + r.id + ':\\s*([\\d.]+)'));
-    if (!m) bad(r.id + ': no SIZES entry (the size chip would silently vanish)');
-    else if (Math.abs(parseFloat(m[1]) - mb) > 0.15) bad(r.id + ': SIZES says ' + m[1] + ' MB, file is ' + mb.toFixed(1) + ' MB');
-    else ok(r.id + ' → ' + r.file + ' (' + mb.toFixed(1) + ' MB)');
-  }
-  // CC BY-SA 4.0 attribution is a licence requirement, not decoration
-  /Z-Anatomy[\s\S]{0,40}CC BY-SA 4\.0/.test(read(OURS.html))
-    ? ok('CC BY-SA 4.0 credit line present')
-    : bad('CC BY-SA attribution missing — required by the model licence');
-}
+/* §5 and §7 need the REAL extended registry, not a regex approximation of it —
+ * D13 moved `ready` out of anatomy-systems.js and into a transform, and a regex
+ * over the source cannot see the result of that transform. Both modules are ESM
+ * in a package.json-less folder (node would treat a .js as CommonJS), so they
+ * load as data: URLs with the bare specifier rewritten. */
+const loadRegistry = () => {
+  const base = 'data:text/javascript;base64,'
+    + Buffer.from(read(OURS.registry), 'utf8').toString('base64');
+  const extra = read(OURS.extra).replace("'./anatomy-systems.js'", JSON.stringify(base));
+  return import('data:text/javascript;base64,' + Buffer.from(extra, 'utf8').toString('base64'));
+};
 
-// ── §6 declared deviations ──────────────────────────────────────────────────
-head('§6  Declared deviations');
-{
-  const html = read(OURS.html), js = read(OURS.js);
-  for (const [id, file, why] of DEVIATIONS) {
-    const src = file === 'atlas.js' ? js : html;
-    if (new RegExp('\\b' + id + '\\b').test(src)) ok(id + ' (' + file + ') — ' + why);
-    else bad(id + ' declared here but not annotated in ' + file);
-  }
-}
+/* three's GLTFLoader does not hand a mesh the name that is in the file: every
+ * node name goes through PropertyBinding.sanitizeNodeName first. Emulating it
+ * here is the whole point of §7 — testing the raw JSON names would have passed
+ * a skeletal scheme that puts 82 structures in "Other" in the actual browser,
+ * because "Eighth rib.l" is really "Eighth_ribl" by the time a classifier sees
+ * it. Material names are NOT sanitised by the loader. */
+const sanitizeNodeName = (n) => n.replace(/\s/g, '_').replace(/[\[\]\.:\/]/g, '');
 
-console.log('\n' + (failed ? '[31m' + failed + ' FAILED[0m' : '[32mall checks passed[0m')
-  + (warned ? ', [33m' + warned + ' warning(s)[0m' : ''));
-process.exit(failed ? 1 : 0);
+/* Minimal GLB reader: the JSON chunk carries node names + material names, which
+ * is everything §7 needs. Draco compresses the geometry, not this. */
+const glbStructures = (file) => {
+  const b = fs.readFileSync(file);
+  let off = 12, g = null;
+  while (off < b.length) {
+    const len = b.readUInt32LE(off);
+    if (b.readUInt32LE(off + 4) === 0x4e4f534a) { g = JSON.parse(b.slice(off + 8, off + 8 + len).toString('utf8')); break; }
+    off += 8 + len;
+  }
+  const out = [];
+  for (const n of (g && g.nodes) || []) {
+    if (n.mesh === undefined) continue;
+    const prims = g.meshes[n.mesh].primitives || [];
+    /* A node with ONE primitive becomes a Mesh carrying the node's name. A node
+     * with SEVERAL becomes a Group with that name whose children are named
+     * "Mesh", "Mesh_1", … — so the structure name is on the PARENT, and
+     * buildSystem's `o.name || o.parent.name` never reaches the fallback
+     * because "Mesh_7" is truthy. That is the whole reason respiratory shows
+     * 23 lung lobes as "Other" (see README, known upstream issues). Model it
+     * here so a future re-export that splits meshes fails §7 loudly instead of
+     * quietly turning a scheme into one grey pile. */
+    const multi = prims.length > 1;
+    for (const p of prims) {
+      out.push([multi ? 'Mesh' : sanitizeNodeName(n.name || ''),
+        p.material === undefined ? '' : g.materials[p.material].name]);
+    }
+  }
+  return out;
+};
+
+loadRegistry().then((REG) => {
+  // ── §5 assets match the registry ──────────────────────────────────────────
+  head('§5  Shipped assets match the registry');
+  {
+    const ready = REG.SYSTEMS.filter((s) => s.status === 'ready');
+    ready.length ? ok(ready.length + " systems marked 'ready' in the registry") : bad('parsed 0 ready systems');
+    const js = read(OURS.js);
+    for (const r of ready) {
+      const p = path.join(ROOT, 'anatomy', r.file);
+      if (!fs.existsSync(p)) { bad(r.id + ": status 'ready' but anatomy/" + r.file + ' is missing'); continue; }
+      const mb = fs.statSync(p).size / 1048576;
+      // D10 — SIZES is keyed by registry id, not filename. A miss silently drops the chip.
+      const m = js.match(new RegExp('\\b' + r.id + ':\\s*([\\d.]+)'));
+      if (!m) bad(r.id + ': no SIZES entry (the size chip would silently vanish)');
+      else if (parseFloat(m[1]) === 0) bad(r.id + ': SIZES is 0 — falsy, so the chip silently vanishes');
+      else if (Math.abs(parseFloat(m[1]) - mb) > 0.15) bad(r.id + ': SIZES says ' + m[1] + ' MB, file is ' + mb.toFixed(1) + ' MB');
+      else ok(r.id + ' → ' + r.file + ' (' + mb.toFixed(1) + ' MB)');
+    }
+    // Every shipped GLB must be reachable. The bug D13 fixes was exactly this:
+    // 15 MB of exported asset that no registry row pointed at.
+    const files = new Set(REG.SYSTEMS.map((s) => s.file));
+    const orphans = fs.readdirSync(path.join(ROOT, 'anatomy')).filter((f) => f.endsWith('.glb') && !files.has(f));
+    orphans.length ? bad('GLB shipped but unreachable from the registry: ' + orphans.join(', '))
+      : ok('no orphaned GLBs — every shipped asset has a registry row');
+    // CC BY-SA 4.0 attribution is a licence requirement, not decoration
+    /Z-Anatomy[\s\S]{0,40}CC BY-SA 4\.0/.test(read(OURS.html))
+      ? ok('CC BY-SA 4.0 credit line present')
+      : bad('CC BY-SA attribution missing — required by the model licence');
+  }
+
+  // ── §6 declared deviations ────────────────────────────────────────────────
+  head('§6  Declared deviations');
+  {
+    const html = read(OURS.html), js = read(OURS.js);
+    for (const [id, file, why] of DEVIATIONS) {
+      const src = file === 'atlas.js' ? js : html;
+      if (new RegExp('\\b' + id + '\\b').test(src)) ok(id + ' (' + file + ') — ' + why);
+      else bad(id + ' declared here but not annotated in ' + file);
+    }
+  }
+
+  // ── §7 every layer scheme actually buckets its model ──────────────────────
+  /* The failure mode this catches is silent: a scheme whose regexes stop
+   * matching still renders — every structure just lands in "Other" and the
+   * layer rail becomes decoration. That is not hypothetical, it is precisely
+   * what `scheme: 'generic'` did to these systems before D13 (renal's materials
+   * are Organ/Ductus; nothing in the generic set matches them). */
+  head('§7  Layer schemes bucket their models (D13)');
+  {
+    const OTHER_MAX = 0.20;
+    // The upstream's own schemes are NOT asserted here: nervous ships a broad
+    // "Sense organs & other" bucket by design, and the AnatomyTOOL models run
+    // the generic material classifier. Re-tuning either is upstream's call —
+    // doing it here would be drift. §7 covers the schemes THIS port authored.
+    const MINE = new Set(['renal', 'digestive', 'endocrine', 'lymphatic', 'reproductive',
+      'integumentary', 'skeletal', 'joints', 'muscular', 'insertions', 'regions']);
+    for (const s of REG.SYSTEMS) {
+      if (s.status !== 'ready' || !MINE.has(s.scheme)) continue;
+      const p = path.join(ROOT, 'anatomy', s.file);
+      if (!fs.existsSync(p)) continue; // already reported by §5
+      const { layers, classify } = REG.schemeFor(s.scheme);
+      const items = glbStructures(p).filter(([n]) => !REG.isLabelMesh(n));
+      const counts = {};
+      for (const [n, mat] of items) { const k = classify(n, mat); counts[k] = (counts[k] || 0) + 1; }
+      const known = new Set(layers.map((l) => l.key));
+      const unknown = Object.keys(counts).filter((k) => !known.has(k));
+      const filled = layers.filter((l) => counts[l.key] && l.key !== 'other').length;
+      const otherPct = items.length ? (counts.other || 0) / items.length : 1;
+      if (!items.length) bad(s.id + ': parsed 0 structures from ' + s.file);
+      else if (unknown.length) bad(s.id + ': classify returns keys with no layer def: ' + unknown.join(', '));
+      else if (filled < 2) bad(s.id + ': only ' + filled + ' non-empty layer — the rail would do nothing');
+      else if (otherPct > OTHER_MAX) bad(s.id + ': ' + Math.round(otherPct * 100) + '% of structures fall in "Other" (max ' + OTHER_MAX * 100 + '%)');
+      else ok(s.id + ': ' + items.length + ' structures → ' + filled + ' layers, ' + Math.round(otherPct * 100) + '% other');
+    }
+  }
+
+  console.log('\n' + (failed ? '[31m' + failed + ' FAILED[0m' : '[32mall checks passed[0m')
+    + (warned ? ', [33m' + warned + ' warning(s)[0m' : ''));
+  process.exit(failed ? 1 : 0);
+}).catch((e) => {
+  console.error('\n[31mvalidator crashed:[0m ' + e.stack);
+  process.exit(1);
+});
